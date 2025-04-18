@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>County Resource Map</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoapify/leaflet-address-search-plugin@1/dist/L.Control.GeoapifyAddressSearch.min.css" />
+
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .county-label {
+      font-style: italic;
+      font-size: 14px;
+      font-weight: bold;
+      color: red;
+      text-shadow:
+        -1px -1px 0 #fff,
+         1px -1px 0 #fff,
+        -1px  1px 0 #fff,
+         1px  1px 0 #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/@geoapify/leaflet-address-search-plugin@1/dist/L.Control.GeoapifyAddressSearch.min.js"></script>
+
+  <script>
+    const map = L.map('map').setView([33.5, -83.5], 6);
+
+    // Esri Imagery + Labels
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}').addTo(map);
+
+    // Create marker styles
+    function createMarker(color) {
+      return new L.Icon({
+        iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+    }
+
+    const icons = {
+      blue: createMarker('blue'),
+      red: createMarker('red'),
+      green: createMarker('green'),
+      black: createMarker('black')
+    };
+
+    const layers = {
+      brokers: L.markerClusterGroup(),
+      surveyors: L.markerClusterGroup(),
+      soil: L.markerClusterGroup(),
+      clearing: L.markerClusterGroup()
+    };
+
+    // Contact Info Popup Generator
+    function makePopup(p) {
+      return `
+        <div style="min-width:200px;">
+          <b>${p.Full_Name ?? 'No Name'}</b><br>
+          ${p.Phone_Number___Mobile || p.Phone_Number___Work ? `<strong>Phone:</strong> ${p.Phone_Number___Mobile ?? p.Phone_Number___Work}<br>` : ''}
+          ${p.Email_Address___Work ? `<strong>Email:</strong> <a href="mailto:${p.Email_Address___Work}">${p.Email_Address___Work}</a><br>` : ''}
+          ${p.Website ? `<strong>Website:</strong> <a href="${p.Website}" target="_blank">${p.Website}</a>` : ''}
+        </div>
+      `;
+    }
+
+    function loadLayer(url, cluster, icon) {
+      fetch(url)
+        .then(res => res.json())
+        .then(data => {
+          const layer = L.geoJSON(data, {
+            pointToLayer: (feature, latlng) => L.marker(latlng, { icon }),
+            onEachFeature: (feature, layer) => {
+              const p = feature.properties;
+              layer.bindPopup(makePopup(p));
+            }
+          });
+          cluster.addLayer(layer);
+          map.addLayer(cluster);
+        });
+    }
+
+    // Load all layers
+    loadLayer("brokers.geojson", layers.brokers, icons.blue);
+    loadLayer("surveyors.geojson", layers.surveyors, icons.red);
+    loadLayer("soilscientist.geojson", layers.soil, icons.green);
+    loadLayer("clearedgrading.geojson", layers.clearing, icons.black);
+
+    // Counties + dynamic labels
+    fetch("counties.geojson")
+      .then(res => res.json())
+      .then(data => {
+        const counties = L.geoJSON(data, {
+          style: {
+            color: "#000",
+            weight: 1.5,
+            fillColor: "#FFFDD0",
+            fillOpacity: 0.3
+          },
+          onEachFeature: function (feature, layer) {
+            if (feature.properties.Name) {
+              const center = layer.getBounds().getCenter();
+              const label = L.marker(center, {
+                icon: L.divIcon({
+                  className: 'county-label',
+                  html: feature.properties.Name,
+                  iconSize: [100, 20]
+                }),
+                interactive: false
+              });
+
+              const toggle = () => {
+                const z = map.getZoom();
+                if (z >= 8 && z <= 11) {
+                  if (!map.hasLayer(label)) map.addLayer(label);
+                } else {
+                  if (map.hasLayer(label)) map.removeLayer(label);
+                }
+              };
+
+              map.on('zoomend', toggle);
+              toggle();
+            }
+          }
+        }).addTo(map);
+
+        map.fitBounds(counties.getBounds());
+      });
+
+    // Toggle controls
+    L.control.layers(null, {
+      "Brokers (Blue)": layers.brokers,
+      "Surveyors (Red)": layers.surveyors,
+      "Soil Scientists (Green)": layers.soil,
+      "Clearing & Grading (Black)": layers.clearing
+    }, { collapsed: false }).addTo(map);
+
+    // Geoapify Address Search
+    const searchControl = L.control.addressSearch('894b01483909499bbd13786d80a0b2c1', {
+      position: 'topleft',
+      placeholder: 'Search address...',
+      resultCallback: function (result) {
+        if (result && result.lat && result.lon) {
+          L.marker([result.lat, result.lon]).addTo(map)
+            .bindPopup(result.formatted).openPopup();
+          map.setView([result.lat, result.lon], 12);
+        }
+      }
+    });
+    map.addControl(searchControl);
+  </script>
+</body>
+</html>
