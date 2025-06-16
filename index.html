@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Advanced County Contact Map</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoapify/leaflet-address-search-plugin@1/dist/L.Control.GeoapifyAddressSearch.min.css" />
+
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .county-label {
+      font-style: italic;
+      font-size: 14px;
+      font-weight: bold;
+      color: red;
+      text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px  1px 0 #fff, 1px  1px 0 #fff;
+    }
+    .filter-toggle {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1001;
+      background: white;
+      border-radius: 5px;
+      padding: 6px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+      cursor: pointer;
+    }
+    .filter-toggle img {
+      width: 20px;
+      height: 20px;
+    }
+    .filter-box {
+      position: absolute;
+      top: 50px;
+      right: 10px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+      display: none;
+      width: 240px;
+    }
+    .filter-box select, .filter-box button, .filter-box input {
+      margin: 6px 0;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="filter-toggle" onclick="toggleFilter()">
+    <img src="https://cdn-icons-png.flaticon.com/512/1828/1828919.png" alt="filter icon" />
+  </div>
+  <div class="filter-box" id="filterPanel">
+    <label>State:</label>
+    <select id="stateFilter"><option value="">-- Any --</option></select>
+    <label>Contact Type:</label>
+    <select id="contactType"><option value="">-- Any --</option></select>
+    <label>Full Name:</label>
+    <select id="fullName"><option value="">-- Any --</option></select>
+    <label>Search Text:</label>
+    <input type="text" id="searchInput" placeholder="e.g. John, broker">
+    <button onclick="applyFilter()">🔍 Filter Contact</button>
+    <button onclick="exportCSV()">⬇️ Export CSV</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/@geoapify/leaflet-address-search-plugin@1/dist/L.Control.GeoapifyAddressSearch.min.js"></script>
+
+  <script>
+    const map = L.map('map').setView([35.7822, -80.7934], 7);
+
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}').addTo(map);
+
+    function toggleFilter() {
+      const panel = document.getElementById("filterPanel");
+      panel.style.display = panel.style.display === "none" ? "block" : "none";
+    }
+
+    const allContacts = [];
+    const contactLayer = L.markerClusterGroup().addTo(map);
+
+    function createIcon(url) {
+      return new L.Icon({
+        iconUrl: url,
+        iconSize: [30, 40],
+        iconAnchor: [15, 40],
+        popupAnchor: [0, -35],
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        shadowSize: [41, 41]
+      });
+    }
+
+    const iconUrls = {
+      brokers: 'https://cdn-icons-png.flaticon.com/512/1077/1077012.png',
+      surveyors: 'https://cdn-icons-png.flaticon.com/512/2303/2303984.png',
+      soil: 'https://cdn-icons-png.flaticon.com/512/2784/2784403.png',
+      clearing: 'https://cdn-icons-png.flaticon.com/512/831/831276.png'
+    };
+
+    function loadContacts(file, iconType) {
+      const icon = createIcon(iconUrls[iconType]);
+      fetch(file).then(res => res.json()).then(data => {
+        L.geoJSON(data, {
+          pointToLayer: (feature, latlng) => {
+            const marker = L.marker(latlng, { icon });
+            marker.feature = feature;
+            allContacts.push(marker);
+            return marker;
+          },
+          onEachFeature: (feature, layer) => {
+            const p = feature.properties;
+            let fullName, phone, email, website, contactType;
+
+            if (iconType === 'brokers') {
+              fullName = p.full_name || 'No Name';
+              phone = p.phone || '';
+              email = p.email || '';
+              website = p.website || '';
+              contactType = p.contact_type || 'Broker';
+            } else {
+              fullName = p.Full_Name || p.Contact_Name || 'No Name';
+              phone = p.Phone_Number___Mobile || p.Phone_Number___Work || p.Phone || '';
+              email = p.Email_Address___Work || p.Email || '';
+              website = p.Website || '';
+              contactType = p.Contact_Type || iconType.charAt(0).toUpperCase() + iconType.slice(1);
+            }
+
+            layer.bindPopup(`
+              <b>${fullName}</b><br>
+              ${p.state || p.State ? `<strong>State:</strong> ${p.state || p.State}<br>` : ''}
+              ${contactType ? `<strong>Type:</strong> ${contactType}<br>` : ''}
+              ${phone ? `<strong>Phone:</strong> ${phone}<br>` : ''}
+              ${email ? `<strong>Email:</strong> <a href="mailto:${email}">${email}</a><br>` : ''}
+              ${website ? `<strong>Website:</strong> <a href="${website}" target="_blank">${website}</a>` : ''}
+            `);
+
+            contactLayer.addLayer(layer);
+          }
+        });
+      });
+    }
+
+    loadContacts("brokers.geojson", "brokers");
+    loadContacts("surveyors_FIXED.geojson", "surveyors");
+    loadContacts("soilscientist_FIXED.geojson", "soil");
+    loadContacts("clearedgrading_FIXED.geojson", "clearing");
+
+    function applyFilter() {
+      const state = document.getElementById("stateFilter").value;
+      const type = document.getElementById("contactType").value;
+      const name = document.getElementById("fullName").value;
+      const keyword = document.getElementById("searchInput").value.toLowerCase();
+
+      contactLayer.clearLayers();
+      allContacts.forEach(marker => {
+        const p = marker.feature.properties;
+        const searchable = JSON.stringify(p).toLowerCase();
+        if (
+          (state === "" || p.State === state || p.state === state) &&
+          (type === "" || p.Contact_Type === type || p.contact_type === type || iconTypeMatches(p, type)) &&
+          (name === "" || p.Full_Name === name || p.Contact_Name === name || p.full_name === name) &&
+          (keyword === "" || searchable.includes(keyword))
+        ) {
+          contactLayer.addLayer(marker);
+        }
+      });
+
+      if (contactLayer.getLayers().length === 1) {
+        const m = contactLayer.getLayers()[0];
+        map.setView(m.getLatLng(), 11);
+        m.openPopup();
+      }
+    }
+
+    function iconTypeMatches(p, type) {
+      const fallback = (p.Contact_Type || p.contact_type || '').toLowerCase();
+      return fallback.includes(type.toLowerCase());
+    }
+
+    function exportCSV() {
+      let rows = [["Name", "State", "Contact Type", "Phone", "Email", "Website"]];
+      contactLayer.eachLayer(layer => {
+        const p = layer.feature.properties;
+        rows.push([
+          p.Full_Name || p.Contact_Name || p.full_name || '',
+          p.State || p.state || '',
+          p.Contact_Type || p.contact_type || '',
+          p.Phone_Number___Mobile || p.Phone_Number___Work || p.Phone || p.phone || '',
+          p.Email_Address___Work || p.Email || p.email || '',
+          p.Website || p.website || ''
+        ]);
+      });
+
+      const csv = rows.map(r => r.map(val => `"${val}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "filtered_contacts.csv";
+      link.click();
+    }
+
+    Promise.all([
+      fetch("brokers.geojson").then(r => r.json()),
+      fetch("surveyors_FIXED.geojson").then(r => r.json()),
+      fetch("soilscientist_FIXED.geojson").then(r => r.json()),
+      fetch("clearedgrading_FIXED.geojson").then(r => r.json())
+    ]).then(datasets => {
+      const states = new Set(), types = new Set(), names = new Set();
+      datasets.forEach(data => {
+        data.features.forEach(f => {
+          const p = f.properties;
+          if (p.State || p.state) states.add(p.State || p.state);
+          if (p.Contact_Type || p.contact_type) types.add(p.Contact_Type || p.contact_type);
+          if (p.Full_Name || p.Contact_Name || p.full_name) names.add(p.Full_Name || p.Contact_Name || p.full_name);
+        });
+      });
+
+      for (let s of [...states].sort()) addOpt("stateFilter", s);
+      for (let t of [...types].sort()) addOpt("contactType", t);
+      for (let n of [...names].sort()) addOpt("fullName", n);
+    });
+
+    function addOpt(id, text) {
+      const opt = document.createElement("option");
+      opt.value = opt.text = text;
+      document.getElementById(id).appendChild(opt);
+    }
+
+    fetch("counties.geojson").then(res => res.json()).then(data => {
+      const counties = L.geoJSON(data, {
+        style: {
+          color: "#000", weight: 1.5,
+          fillColor: "#FFFDD0", fillOpacity: 0.3
+        },
+        onEachFeature: function (feature, layer) {
+          if (feature.properties.Name) {
+            const center = layer.getBounds().getCenter();
+            const label = L.marker(center, {
+              icon: L.divIcon({
+                className: 'county-label',
+                html: feature.properties.Name,
+                iconSize: [100, 20]
+              }),
+              interactive: false
+            });
+
+            const toggle = () => {
+              const z = map.getZoom();
+              if (z >= 8 && z <= 11) {
+                if (!map.hasLayer(label)) map.addLayer(label);
+              } else {
+                if (map.hasLayer(label)) map.removeLayer(label);
+              }
+            };
+
+            map.on('zoomend', toggle);
+            toggle();
+          }
+        }
+      }).addTo(map);
+    });
+
+    L.control.addressSearch('894b01483909499bbd13786d80a0b2c1', {
+      position: 'topleft',
+      placeholder: 'Search address...',
+      resultCallback: function (result) {
+        if (result && result.lat && result.lon) {
+          L.marker([result.lat, result.lon]).addTo(map)
+            .bindPopup(result.formatted).openPopup();
+          map.setView([result.lat, result.lon], 12);
+        }
+      }
+    }).addTo(map);
+  </script>
+</body>
+</html>
